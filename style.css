@@ -1,0 +1,10 @@
+#opencode_go_helper .inline-drawer-content { padding-block: 8px; }
+#opencode_go_helper p { margin: 10px 0; }
+#opencode_go_helper .ocg-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+#opencode_go_helper .ocg-actions button { width: auto; margin: 0; }
+#opencode_go_helper .ocg-note { font-size: .9em; opacity: .8; line-height: 1.5; }
+#opencode_go_helper code { display: block; overflow-wrap: anywhere; font-size: .85em; }
+#opencode_go_helper details { margin-top: 12px; }
+#opencode_go_helper summary { cursor: pointer; }
+#opencode_go_helper input[readonly] { width: 100%; min-width: 0; }
+#opencode_go_helper :is(button, input, summary):focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
