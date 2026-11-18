@@ -2,7 +2,7 @@ async (page) => {
     await page.route(/\/api\/(settings\/save|chats\/save|chats\/group\/save)(?:\?|$)/, route => route.fulfill({ json: { result: 'ok' } }));
     const base = '.'; // Run Playwright CLI from the repository root.
     const webBase = '/scripts/extensions/third-party/ocg-local-test/';
-    for (const file of ['index.js', 'core.js', 'transport.js', 'bridge.js', 'style.css']) {
+    for (const file of ['index.js', 'core.js', 'sha256.js', 'transport.js', 'bridge.js', 'style.css']) {
         await page.route(`**${webBase}${file}`, route => route.fulfill({
             path: `${base}/${file}`, contentType: file.endsWith('.css') ? 'text/css' : 'text/javascript',
         }));

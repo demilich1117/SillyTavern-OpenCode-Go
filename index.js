@@ -1,4 +1,6 @@
-import { MODULE_ID, VERSION, GO_URL, inspectEndpoint, sessionIdFor } from './core.js';
+import { CLIENT_VERSION } from '/script.js';
+import { MODULE_ID, VERSION, GO_URL, hostCapabilities, inspectEndpoint, sessionIdFor } from './core.js';
+import { sha256 } from './sha256.js';
 import { createBridge, createProfileRequest } from './bridge.js';
 import { installTransport } from './transport.js';
 
@@ -31,8 +33,10 @@ function requestSnapshot() {
     return {
         enabled: value.enabled,
         directRequests: value.directRequests,
-        sessionId: sessionIdFor(context(), value.namespace, SillyTavern.libs.sha256),
+        sessionId: sessionIdFor(context(), value.namespace, SillyTavern.libs.sha256 ?? sha256),
         parseYaml: SillyTavern.libs.yaml.parse,
+        supportsSecretId: hostCapabilities(CLIENT_VERSION).supportsSecretId,
+        isTt: Boolean(globalThis.__TAURITAVERN__),
     };
 }
 
@@ -44,17 +48,18 @@ function refresh() {
     const endpoint = inspectEndpoint(ctx.chatCompletionSettings.custom_url);
     root.querySelector('[data-ocg="enabled"]').checked = value.enabled;
     root.querySelector('[data-ocg="direct"]').checked = value.directRequests;
-    let message = '辅助模型兼容已启用；主聊天可使用其他服务。子模型请填写下方 Go 地址。';
+    let message = '主聊天使用其他连接。';
     if (!value.enabled) message = '自动请求头已关闭。';
     else if (ctx.mainApi === 'openai' && ctx.chatCompletionSettings.chat_completion_source === 'custom') {
-        if (!endpoint) message = '当前主连接使用其他地址；OpenCode 子模型请求仍会自动适配。';
-        else if (endpoint.plan.startsWith('payg')) message = '当前是按量计费地址。你使用 Go 订阅，请应用下方 Go 地址。';
-        else if (endpoint.plan.endsWith('legacy')) message = '当前是旧版 Go 地址，建议应用下方新版地址。';
-        else message = 'Go 地址正确；发送时将自动补充会话请求头。';
+        if (globalThis.__TAURITAVERN__ && ctx.chatCompletionSettings.custom_api_format && ctx.chatCompletionSettings.custom_api_format !== 'openai_compat') {
+            message = '主聊天使用其他协议。Go 需要 Chat Completions。';
+        } else if (endpoint?.plan.startsWith('payg')) message = '主聊天使用 OpenCode 按量计费地址。';
+        else if (endpoint?.plan.endsWith('legacy')) message = '主聊天使用旧版 Go 地址。';
+        else if (endpoint) message = '主聊天已配置 Go 地址。';
     }
     root.querySelector('[data-ocg="status"]').textContent = message;
     root.querySelector('[data-ocg="session"]').textContent = requestSnapshot().sessionId;
-    root.querySelector('[data-ocg="last"]').textContent = lastRequest || '尚未处理请求。连接配置正确不等于账号鉴权已通过。';
+    root.querySelector('[data-ocg="last"]').textContent = lastRequest || '暂无请求';
 }
 
 function mount() {
@@ -73,21 +78,18 @@ function mount() {
             <div class="inline-drawer-content">
                 <label class="checkbox_label"><input type="checkbox" data-ocg="enabled">自动附加会话请求头</label>
                 <label class="checkbox_label"><input type="checkbox" data-ocg="direct">转发本页插件的 OpenCode 直连请求</label>
-                <p class="ocg-note">连接档案和酒馆助手独立 API 自动兼容。插件直接请求 OpenCode 时，可启用转发；iframe / Worker 自行发起的请求需接入统一入口。</p>
                 <p data-ocg="status" role="status" aria-live="polite"></p>
                 <label for="ocg_base_url">OpenCode Go · API 地址</label>
                 <input id="ocg_base_url" class="text_pole" readonly value="${GO_URL}">
                 <div class="ocg-actions">
-                    <button type="button" class="menu_button" data-ocg="apply">应用 Go 地址</button>
+                    <button type="button" class="menu_button" data-ocg="apply">主聊天切换到 Go</button>
                     <button type="button" class="menu_button" data-ocg="refresh">检查当前配置</button>
                 </div>
-                <p class="ocg-note">仅用作子模型时，在对应插件填写 Go 地址与密钥即可，无需点击「应用 Go 地址」。该按钮会切换主聊天连接。连接档案的密钥仍保存在酒馆原生密钥栏。</p>
+                <p class="ocg-note">子模型请在对应插件中填写上方地址。</p>
                 <details>
                     <summary>请求状态</summary>
                     <p>当前会话标识</p><code data-ocg="session"></code>
                     <p data-ocg="last"></p>
-                    <p class="ocg-note">同一聊天的续写、重生成和滑动回复共用标识。新聊天或分支使用新标识；聊天重命名也会更换标识。未打开聊天时，测试和模型检查使用独立固定标识。</p>
-                    <p class="ocg-note">模型列表来自 OpenCode 公共目录，可能包含 Go 套餐以外的模型；请按自己的 Go 模型权限选择。</p>
                 </details>
             </div>
         </div>`;
@@ -118,7 +120,7 @@ function mount() {
         $(source).val('custom').trigger('change');
         $(api).val('openai').trigger('change');
         refresh();
-        globalThis.toastr?.success('已应用 Go 地址。请核对自定义 API 密钥和模型，再发送测试消息。');
+        globalThis.toastr?.success('主聊天已切换到 Go。');
     });
     refresh();
 }
@@ -126,20 +128,20 @@ function mount() {
 export function activate() {
     if (disposeTransport) return;
     const ctx = context();
-    if (!SillyTavern.libs.yaml?.parse || !SillyTavern.libs.sha256 || !ctx.uuidv4 || !ctx.getRequestHeaders) {
-        throw new Error('OpenCode Go 连接助手需要 SillyTavern 1.19.0 的 YAML、SHA-256 和 UUID 接口。');
+    if (!SillyTavern.libs?.yaml?.parse || !ctx.uuidv4 || !ctx.getRequestHeaders) {
+        throw new Error('OpenCode Go 连接助手缺少宿主的 YAML、UUID 或请求头接口，请核对酒馆版本。');
     }
     if (globalThis.OpenCodeGo !== undefined) throw new Error('OpenCode Go：统一入口名称已被占用，请检查重复安装。');
     settings();
     const onApplied = request => {
         const kind = { custom: '酒馆自定义连接', proxy: '独立 API / OpenAI 代理', bridge: '插件转发' }[request.kind];
-        lastRequest = `最近已适配：${kind} · ${request.operation === 'status' ? '模型列表' : request.stream ? '流式生成' : '普通生成'}。是否成功以服务端返回为准。`;
+        lastRequest = `${kind} · ${request.operation === 'status' ? '模型列表' : request.stream ? '流式生成' : '普通生成'}`;
         refresh();
     };
     const previousFetch = globalThis.fetch.bind(globalThis);
     let active = true;
     const bridgeFetch = createBridge({
-        origin: location.origin, snapshot: requestSnapshot, fetchHost: previousFetch,
+        origin: location.href, snapshot: requestSnapshot, fetchHost: previousFetch,
         getRequestHeaders: () => context().getRequestHeaders(), onApplied, isActive: () => active,
     });
     bridgeApi = Object.freeze({ version: VERSION, fetch: bridgeFetch, captureSession: () => requestSnapshot().sessionId,
@@ -147,7 +149,7 @@ export function activate() {
     });
     globalThis.OpenCodeGo = bridgeApi;
     const removeTransport = installTransport(globalThis, {
-        origin: location.origin,
+        origin: location.href,
         snapshot: requestSnapshot,
         directFetch: bridgeFetch,
         onApplied,
@@ -173,3 +175,8 @@ export function deactivate() {
     subscriptions = [];
     document.getElementById(MODULE_ID)?.remove();
 }
+
+// TT installs its own fetch router before extensions can wrap it.
+await (globalThis.__TAURITAVERN__?.ready ?? globalThis.__TAURITAVERN_MAIN_READY__);
+// ST 1.14–1.16 only execute the module. Later loaders invoke the manifest hook.
+if (hostCapabilities(CLIENT_VERSION).legacyLoader) activate();

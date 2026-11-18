@@ -1,6 +1,6 @@
 # OpenCode Go 连接助手
 
-为 SillyTavern 1.19.0 的主聊天和辅助模型请求补充 OpenCode 会话请求头，并修复模型列表地址。版本 **0.2.0**：支持原生连接档案、酒馆助手独立 API、可选插件直连转发，以及脚本统一入口。可用于填表、MVU 更新、总结等辅助生成的连接适配；具体输出质量仍取决于模型和调用方。
+为主聊天和辅助模型的 OpenCode 请求添加会话头，自动修正模型列表地址。**0.3.0** 支持 SillyTavern 1.14–1.19 和 TauriTavern（TT 酒馆）2.3、2.4 的 Custom Chat Completions 连接。
 
 ## 你应填写的 URL
 
@@ -14,7 +14,7 @@ https://opencode.ai/inference/go/openai/v1
 
 连接档案的 API 密钥填在酒馆原生「自定义 API 密钥」栏；使用插件独立 API 时沿用该插件的凭据配置。模型 ID 使用你的 Go 套餐支持的模型。本扩展不保存密钥，也不需要手填会话请求头。
 
-**只用作子模型时，不要点击「应用 Go 地址」：该按钮用于切换主聊天连接。** 在填表、变量更新或其他插件中选用 Go 连接档案，或填写上方独立 API 地址即可，主聊天可以继续使用其他服务。
+只用作子模型时，在填表、变量更新或其他插件中填写 Go 地址，或选择已保存的 Go 连接档案。
 
 ## 安装
 
@@ -24,14 +24,13 @@ https://opencode.ai/inference/go/openai/v1
 https://github.com/demilich1117/SillyTavern-OpenCode-Go
 ```
 
-安装完成后刷新页面，打开「OpenCode Go 连接助手」，保持「自动附加会话请求头」启用。主聊天使用 Go 时可点击「应用 Go 地址」，然后选择模型并填写原生自定义 API 密钥；仅用于子模型时按下节配置。
+已安装的用户可在扩展管理中检查更新并刷新。主聊天使用 Go 时，打开「OpenCode Go 连接助手」，点击「主聊天切换到 Go」，再选择模型并填写原生自定义 API 密钥。TT 可使用同一仓库地址安装或更新。
 
 也可从 [Releases](https://github.com/demilich1117/SillyTavern-OpenCode-Go/releases) 下载 ZIP，手动安装：
 
 1. 解压安装包，把 `SillyTavern-OpenCode-Go` 文件夹放入酒馆的 `data/<用户目录>/extensions/`。单用户默认目录通常是 `data/default-user/extensions/`。
 2. 确认 `manifest.json` 直接位于该文件夹内，而不是再套一层同名目录。
 3. 刷新酒馆，打开「扩展 → OpenCode Go 连接助手」。
-4. 主聊天使用 Go 时点击「应用 Go 地址」，核对原生密钥和模型；仅用作子模型时，在对应插件中配置 Go 连接。
 
 也可放入 `public/scripts/extensions/third-party/SillyTavern-OpenCode-Go/`，作为所有用户可见的安装。两种方式只选一种。
 
@@ -39,7 +38,7 @@ https://github.com/demilich1117/SillyTavern-OpenCode-Go
 
 ## 子模型与插件兼容
 
-| 调用方式 | 0.2.0 的行为 |
+| 调用方式 | 处理方式 |
 |---|---|
 | 酒馆连接档案 / `ChatCompletionService` 的 Custom 请求 | 自动补头和修正模型目录，不要求主连接也是 Go。 |
 | 酒馆助手 `generate` / `generateRaw` 独立 API，默认 OpenAI 来源 | 自动适配 `openai + reverse_proxy`，保留该次请求的密钥、模型与生成参数。 |
@@ -54,7 +53,9 @@ OpenAI 代理模式会在**单次转发请求**中改为酒馆 Custom 来源，�
 
 ## 脚本统一入口
 
-推荐通过已保存的原生 Custom 连接档案调用。密钥始终由酒馆服务端读取，前端无需开启“查看密钥”：
+**ST 1.14–1.17** 的后端只读取当前选中的 Custom 密钥。主聊天可照常使用，脚本独立调用请用 `api.fetch` 并通过 `init.headers.Authorization` 提供调用方凭据。显式指定档案或密钥 ID 的请求会在发送前给出版本提示。
+
+**ST 1.18 起及 TT 2.3、2.4** 可按档案 ID 发起请求。密钥由宿主读取。
 
 ```js
 // 原生扩展使用 window；同源助手 iframe 使用 window.parent。
@@ -104,7 +105,7 @@ const response = await api.fetch(
 ## 自动处理的内容
 
 - 向每次匹配的请求添加 `x-opencode-session`；同一聊天的普通生成、续写、重生成、滑动回复及标准辅助请求复用标识。
-- 使用真实客户端标识 `User-Agent: SillyTavern-OpenCode-Go/0.2.0`。
+- 使用客户端标识 `User-Agent: SillyTavern-OpenCode-Go/0.3.0`。
 - 保留其他 YAML / JSON 附加请求头；只替换上述两个字段，避免大小写不同产生重复会话头。
 - 清理官方 Chat Completions 地址的多余末尾斜线和重复 `/chat/completions` 后缀。
 - 模型检查改用公共目录 `https://opencode.ai/inference/v1/models`；聊天生成继续走原来的 Go 或按量计费路径，扩展不会自动更换计费路径。
@@ -122,23 +123,19 @@ const response = await api.fetch(
 
 自动适配的辅助调用使用发起请求时页面的当前聊天标识。统一入口支持 `captureSession()`，让跨聊天后台任务显式携带任务开始时的标识；不把任务名称、角色名或聊天正文传入会话头。
 
-## 验证结果与限制
+## 宿主验证
 
-- 核验宿主：本机 SillyTavern **1.19.0 / `06bde939f`**。
-- 0.2.0：29 项 Node 测试通过，覆盖旧版路径及独立 API 转换、密钥隔离、原生档案引用、JSON/工具参数、统一入口、会话捕获、流式透传、SSE 响应类型、取消、停用和错误状态转换。
-- 在真实酒馆页面中以隔离上下文验证挂载、重复初始化、切换聊天、停用 / 重启及真实宿主 YAML 库。合成请求在浏览器中截获，没有发送真实聊天或使用账号密钥。
-- 0.2.0 进一步检查本机酒馆助手 4.11.3 的真实 `generateRaw` / `getModelList` 调用链、`ChatCompletionService`、同源 iframe Request 和直连转发开关；合成请求检查通过。详细验证见 [0.2.0 记录](validation-0.2.0-2026-10-30.md)。
-- 0.2.0 原生档案统一入口已用真实 Go 账号验证 JSON Schema、强制工具调用和流式输出；两个非流式响应均确认 `billing_source: go`。安装后复测 SSE 响应类型及完整性通过。
-- **2026-10-30 已完成真实 Go 账号测试**：使用酒馆保存的 OCG 密钥和 `deepseek-v4.1-flash`，普通、流式及原生主生成路径均有有效回复；非流式用量返回 `billing_source: go`。三次请求会话标识一致。模型列表返回 200，并包含该模型。详见 [实机验证记录](validation-2026-10-30.md)。该结果不代表所有模型或未来的账号额度、区域状态。
-- 尚未验证 TauriTavern 或其他版本。当前仅支持 Chat Completions 入口；OpenCode 官方说明新版网关可转换付费 / Go 文本模型协议，但本扩展没有单独验证全部模型。
-- OpenCode Go 官方定位是编码代理流量，并要求客户端自报身份及稳定会话标识；扩展只补充真实标识，不改变服务的使用范围或模型权限。
+- 0.3.0 在五个官方 SillyTavern 发行版（1.14.0、1.15.0、1.16.0、1.17.0、1.18.0）逐版验证了自动加载、模型列表、普通及流式生成。本地模拟上游收到了预期的会话头、客户端标识和测试凭据。
+- TT 2.3.0 和 2.4.0 在 Windows 官方便携版的原生 WebView 中完成自动加载、设置面板、模型列表改写、代理凭据和流式读取检查。请求使用模拟响应；TT Rust 后端到上游的完整联网流程未实测。
+- TT 使用 Custom Chat Completions 路由。内置 OpenCode 来源、其他自定义协议及 Agent 原生生成沿用 TT 自身的流程。iOS 发行版须允许自定义端点。
+- SillyTavern 1.19.0 的真实 Go 账号、酒馆助手和原生档案验证见 [0.1.0 验证记录](validation-2026-10-30.md) 和 [0.2.0 验证记录](validation-0.2.0-2026-10-30.md)。
 
 ## 排错
 
 | 现象 | 检查 |
 |---|---|
 | 模型列表 404 | 确认扩展启用、选择「自定义」来源。新版请求应被转到公共模型目录。 |
-| 缺少 session header | 展开扩展的「请求状态」。若仍显示未处理，检查请求是否来自本页面的标准酒馆接口。 |
+| 缺少 session header | 展开扩展的「请求状态」。若显示「暂无请求」，检查调用是否经过本页的 Chat Completions 接口。 |
 | 401 / 403 | 检查 Go 账号密钥、权限、区域及所选模型；仅补请求头不会解决账号鉴权问题。 |
 | 429 | 检查套餐额度和并发限制。 |
 | 附加请求头格式错误 | 在酒馆自定义连接的附加参数中修正 YAML / JSON；扩展会停止该请求，避免丢弃已有头。 |
@@ -151,7 +148,7 @@ npm test
 npm run check
 ```
 
-运行时使用 `SillyTavern.libs.yaml` 和 `SillyTavern.libs.sha256`；npm 的 YAML 依赖只用于测试。`test/browser-smoke.pw.js` 是 Playwright CLI 的隔离烟测脚本，从仓库根目录执行。合成请求的浏览器检查不代替 Go 账号实测。
+运行时使用宿主 YAML 库。旧版缺少 SHA-256 时，扩展使用内置的同步实现，升级后沿用原会话标识。npm 的 YAML 依赖仅用于测试。`test/browser-smoke.pw.js` 是 1.19 与酒馆助手的 Playwright CLI 检查脚本。
 
 采用 [MIT 许可证](LICENSE)。
 

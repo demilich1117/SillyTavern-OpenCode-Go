@@ -1,4 +1,4 @@
-import { inspectDirectRequest, inspectEndpoint, isRequest, mergeHeaders, preparePayload } from './core.js';
+import { checkSecretId, inspectDirectRequest, inspectEndpoint, isRequest, mergeHeaders, preparePayload } from './core.js';
 
 /** Explicit bridge for plugins / same-origin frames; never reads or saves keys. */
 export function createBridge({ origin, snapshot, fetchHost, getRequestHeaders, onApplied = () => {}, isActive = () => true }) {
@@ -21,6 +21,7 @@ export function createBridge({ origin, snapshot, fetchHost, getRequestHeaders, o
         // Copy only end-to-end upstream headers; browser/host credentials stay local.
         const headers = { Authorization: upstreamHeaders.get('authorization') ?? '' };
         if (secretId !== undefined) {
+            checkSecretId(secretId, options.supportsSecretId);
             if (typeof secretId !== 'string' || !secretId || upstreamHeaders.has('authorization')) {
                 throw new Error('OpenCode Go：请使用一个原生自定义密钥 ID，且不要同时提供 Authorization。');
             }
@@ -47,11 +48,18 @@ export function createBridge({ origin, snapshot, fetchHost, getRequestHeaders, o
             chat_completion_source: 'custom', custom_url: route.baseUrl,
             custom_include_headers: JSON.stringify(headers),
             ...(secretId !== undefined ? { secret_id: secretId } : {}),
-            ...(body ? { model: body.model, stream: body.stream ?? false, messages: body.messages,
+            ...(body ? { ...(options.isTt ? { type: 'quiet' } : {}), model: body.model, stream: body.stream ?? false, messages: body.messages,
                 custom_include_body: JSON.stringify(body), custom_exclude_body: JSON.stringify(['logprobs', 'top_logprobs'].filter(key => !Object.hasOwn(body, key))) } : {}),
         }, { ...options, operation: route.operation });
         // Public catalog URLs bypass preparePayload's generation allowlist.
         payload.custom_include_headers = mergeHeaders(payload.custom_include_headers, options.sessionId, options.parseYaml);
+        // TT drops empty header values. Its Custom proxy mode uses only the
+        // supplied proxy credentials, even when a saved Custom key exists.
+        if (options.isTt && secretId === undefined) {
+            payload.reverse_proxy = payload.custom_url;
+            payload.custom_url = '';
+            payload.proxy_password = '';
+        }
         onApplied({ stream: Boolean(body?.stream), operation: route.operation, kind: 'bridge' });
         const response = await fetchHost(new URL(`/api/backends/chat-completions/${route.operation}`, origin).href, {
             method: 'POST', headers: getRequestHeaders(), credentials: 'same-origin', cache: 'no-store',
@@ -82,7 +90,8 @@ export function createProfileRequest({ getProfile, bridgeFetch }) {
     return async (profileId, body, { signal, sessionId } = {}) => {
         if (typeof profileId !== 'string' || !profileId) throw new Error('OpenCode Go：请指定连接档案 ID。');
         const profile = getProfile(profileId);
-        const endpoint = profile?.api === 'custom' ? inspectEndpoint(profile['api-url']) : null;
+        const format = profile?.['custom-api-format'];
+        const endpoint = profile?.api === 'custom' && (!format || format === 'openai_compat') ? inspectEndpoint(profile['api-url']) : null;
         if (!endpoint || !profile['secret-id']) throw new Error('OpenCode Go：连接档案必须使用官方自定义地址并关联原生密钥。');
         if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('OpenCode Go：请提供 Chat Completions 请求体。');
         return bridgeFetch(`${endpoint.baseUrl}/chat/completions`, {

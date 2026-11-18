@@ -1,9 +1,24 @@
 export const MODULE_ID = 'opencode_go_helper';
-export const VERSION = '0.2.0';
+export const VERSION = '0.3.0';
 export const GO_URL = 'https://opencode.ai/inference/go/openai/v1';
 export const PAYG_URL = 'https://opencode.ai/inference/openai/v1';
 export const SESSION_HEADER = 'x-opencode-session';
 export const USER_AGENT = `SillyTavern-OpenCode-Go/${VERSION}`;
+
+export function hostCapabilities(clientVersion) {
+    const match = /^SillyTavern:(\d+)\.(\d+)\./i.exec(clientVersion);
+    const major = Number(match?.[1]), minor = Number(match?.[2]);
+    return {
+        legacyLoader: major === 1 && minor >= 14 && minor < 17,
+        supportsSecretId: major > 1 || (major === 1 && minor >= 18),
+    };
+}
+
+export function checkSecretId(secretId, supportsSecretId) {
+    if (secretId && supportsSecretId === false) {
+        throw new Error('按 ID 选择密钥需要酒馆 1.18 或更高版本。旧版请使用当前 Custom 连接，或为独立请求提供 Authorization。');
+    }
+}
 
 /** Only official, explicitly recognized Chat Completions endpoints are eligible. */
 export function inspectEndpoint(raw) {
@@ -43,7 +58,7 @@ export function sessionIdFor(context, namespace, hash) {
 /** Match the host's YAML object / array-of-objects convention, preserving other headers. */
 export function mergeHeaders(source, sessionId, parseYaml, overrides = {}) {
     let parsed;
-    try { parsed = source?.trim() ? parseYaml(source) : {}; }
+    try { parsed = typeof source === 'string' ? (source.trim() ? parseYaml(source) : {}) : source; }
     catch { throw new Error('OpenCode Go：附加请求头不是有效的 YAML / JSON，请先在酒馆连接设置中修正。'); }
     const entries = Array.isArray(parsed) ? parsed : [parsed ?? {}];
     if (entries.some(item => !item || typeof item !== 'object' || Array.isArray(item))) {
@@ -68,14 +83,17 @@ export function mergeHeaders(source, sessionId, parseYaml, overrides = {}) {
     return JSON.stringify(headers);
 }
 
-export function preparePayload(payload, { enabled, sessionId, parseYaml, operation = 'generate' }) {
+export function preparePayload(payload, { enabled, sessionId, parseYaml, supportsSecretId, isTt, operation = 'generate' }) {
     if (!enabled || !payload) return payload;
     const proxy = payload.chat_completion_source === 'openai';
     if (!proxy && payload.chat_completion_source !== 'custom') return payload;
     // The request's source decides its actual destination. Ignore stale custom_url
     // on OpenAI requests, and stale reverse_proxy on Custom requests.
-    const endpoint = inspectEndpoint(proxy ? payload.reverse_proxy : payload.custom_url);
+    if (isTt && !proxy && payload.custom_api_format && payload.custom_api_format !== 'openai_compat') return payload;
+    const ttProxy = isTt && !proxy && !payload.custom_url && Boolean(payload.reverse_proxy);
+    const endpoint = inspectEndpoint(proxy || ttProxy ? payload.reverse_proxy : payload.custom_url);
     if (!endpoint) return payload;
+    if (!proxy) checkSecretId(payload.secret_id, supportsSecretId);
     const prepared = {
         ...payload,
         chat_completion_source: 'custom',
@@ -91,9 +109,13 @@ export function preparePayload(payload, { enabled, sessionId, parseYaml, operati
     if (proxy) {
         // These settings were inactive in the original OpenAI request. Do not
         // suddenly apply inherited Custom presets or change its credential store.
-        for (const key of ['reverse_proxy', 'proxy_password', 'secret_id', 'custom_include_body', 'custom_exclude_body']) {
+        for (const key of ['reverse_proxy', 'proxy_password', 'secret_id', 'custom_include_body', 'custom_exclude_body', 'custom_api_format']) {
             delete prepared[key];
         }
+    }
+    if (ttProxy) {
+        prepared.reverse_proxy = prepared.custom_url;
+        prepared.custom_url = '';
     }
     return prepared;
 }
@@ -105,10 +127,10 @@ export function isRequest(input) {
 
 export function isHostRequest(input, init, origin) {
     const raw = isRequest(input) ? input.url : input;
-    let url;
-    try { url = new URL(raw, origin); } catch { return false; }
+    let url, page;
+    try { page = new URL(origin); url = new URL(raw, page); } catch { return false; }
     const method = init?.method ?? (isRequest(input) ? input.method : 'GET');
-    return method.toUpperCase() === 'POST' && url.origin === origin
+    return method.toUpperCase() === 'POST' && url.protocol === page.protocol && url.host === page.host
         && ['/api/backends/chat-completions/generate', '/api/backends/chat-completions/status'].includes(url.pathname);
 }
 
